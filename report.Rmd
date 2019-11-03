@@ -1,0 +1,447 @@
+---
+title: "Project2"
+author: '190030150'
+date: "03/11/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+1. Executive summary
+
+2. Introduction
+
+3. Methods
+
+Bootstrapping, randomization and model selection explained detailly. Linear regression mentioned but not explained in detail
+
+Results
+
+Conclusion
+
+```{r}
+library(leaps)
+library(ggvis)
+library(parallel)
+library(lmtest)
+```
+
+```{r}
+myData <- read.csv("fitness.csv")
+```
+
+```{r}
+myMode<- regsubsets(Oxygen~., data = myData)
+```
+
+```{r}
+summaryModel <-summary(myMode)
+summaryModel
+```
+
+This returns the best model for each variable number of paramets the star represents that. Lets check which model return the best BIC
+
+
+
+
+```{r}
+names(summaryModel)
+```
+
+```{r}
+summaryModel$rsq
+summaryModel$bic
+```
+```{r}
+par(mfrow=c(2,2))
+plot(summaryModel$rss ,xlab="Number of Variables ",ylab="RSS",type="l")
+plot(summaryModel$adjr2 ,xlab="Number of Variables ", ylab="Adjusted RSq",type="l")
+# which.max(summaryModel$adjr2)
+points(11,summaryModel$adjr2[11], col="red",cex=2,pch=20)
+plot(summaryModel$cp ,xlab="Number of Variables ",ylab="Cp", type='l')
+# which.min(summaryModel$cp )
+points(10,summaryModel$cp [10],col="red",cex=2,pch=20)
+plot(summaryModel$bic ,xlab="Number of Variables ",ylab="BIC",type='l')
+# which.min(summaryModel$bic )
+points(6,summaryModel$bic [6],col="red",cex=2,pch=20)
+```
+BIC is lowest for four variables we will choose the model with four variables
+
+```{r}
+coef(myMode,4)
+```
+
+```{r}
+regfit.fwd = regsubsets(Oxygen ~. , data=myData,nvmax=19, method ="forward")
+regfit.bwd = regsubsets(Oxygen ~. , data=myData,nvmax=19,method ="backward")
+forwardModel <-summary(regfit.fwd)
+backwardModel <-summary(regfit.bwd)
+```
+
+```{r}
+forwardModel
+backwardModel
+```
+```{r}
+par(mfrow=c(2,2))
+plot(forwardModel$rss ,xlab="Number of Variables ",ylab="RSS",type="l")
+plot(forwardModel$adjr2 ,xlab="Number of Variables ", ylab="Adjusted RSq",type="l")
+# which.max(forwardModel$adjr2)
+points(11,forwardModel$adjr2[11], col="red",cex=2,pch=20)
+plot(forwardModel$cp ,xlab="Number of Variables ",ylab="Cp", type='l')
+# which.min(forwardModel$cp )
+points(10,forwardModel$cp [10],col="red",cex=2,pch=20)
+plot(forwardModel$bic ,xlab="Number of Variables ",ylab="BIC",type='l')
+# which.min(forwardModel$bic )
+points(6,forwardModel$bic [6],col="red",cex=2,pch=20)
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(backwardModel$rss ,xlab="Number of Variables ",ylab="RSS",type="l")
+plot(backwardModel$adjr2 ,xlab="Number of Variables ", ylab="Adjusted RSq",type="l")
+# which.max(backwardModel$adjr2)
+points(11,backwardModel$adjr2[11], col="red",cex=2,pch=20)
+plot(backwardModel$cp ,xlab="Number of Variables ",ylab="Cp", type='l')
+# which.min(backwardModel$cp )
+points(10,backwardModel$cp [10],col="red",cex=2,pch=20)
+plot(backwardModel$bic ,xlab="Number of Variables ",ylab="BIC",type='l')
+# which.min(backwardModel$bic )
+points(6,backwardModel$bic [6],col="red",cex=2,pch=20)
+```
+Our independent variables will be runTime Age, RunPulse and maxPulse
+
+
+
+```{r}
+finalModel <- lm()
+```
+
+Paralellization
+```{r}
+ nCores <- detectCores()
+  
+  # Create a cluster with all but one core of PC
+  myClust <- makeCluster(nCores-1, type = "PSOCK") 
+  
+```
+
+```{r}
+lmBootOptimisedOnce <- function(index, inputData, indexResponse, indexCov){
+  
+  # convert to data-frame if already not
+  inputData = as.data.frame(inputData) 
+  
+  dataDim <- nrow(inputData)#find number of rows
+  
+  
+  bootData <- inputData[sample(1:dataDim, dataDim, replace = T),] #Resample
+  bootData <- as.matrix(bootData)
+  
+  # Adding a column of 1s to the design matrix
+  Xmat <- cbind(1, bootData[ , indexCov])
+  Ymat <- bootData[ , indexResponse]
+  
+  # fast version of linear model (need R version 3.1.0)
+  # https://rpubs.com/maechler/fast_lm
+  model <- .lm.fit(Xmat, Ymat)
+  
+  return(coef(model))
+}
+```
+
+
+```{r}
+lmBootOptimisedPar <- function(nBoot, myData, indexResponse, indexCov)
+{
+```
+
+
+```{r}
+# Preparation for paralellization
+  
+  # For paralellization, find how many cores PC has
+ 
+  bootCoefList <- parLapply(myClust, 1:nBoot, lmBootOptimisedOnce,
+                            inputData = myData, 
+                            indexResponse = indexResponse,
+                            indexCov = indexCov)
+  
+  bootCoefs <- plyr::ldply(bootCoefList)
+  
+  # closing cluster
+  stopCluster(myClust)
+  
+  return(bootCoefs)
+}
+
+```
+
+```{r}
+response <- 3 # Pick oxygen as response value
+covariates <- c(1,4,5,6)
+```
+
+
+```{r}
+bootResults <-(lmBootOptimisedPar(5000,myData,response,covariates))
+```
+
+```{r}
+confInv <-rbind(quantile(bootResults[,1], probs = c(0.025, 0.975)),
+  quantile(bootResults[,2], probs = c(0.025, 0.975)),quantile(bootResults[,3], probs = c(0.025, 0.975)),quantile(bootResults[,4], probs = c(0.025, 0.975)),quantile(bootResults[,5], probs = c(0.025, 0.975)))
+```
+
+```{r}
+ hist(bootResults[,1], col = "slateblue4", main = 'intercept distribution')
+  
+
+  hist(bootResults[,2], col = "slateblue4", main = 'Age')
+  
+    hist(bootResults[,3], col = "slateblue4", main = 'RunTime')
+    
+      hist(bootResults[,4], col = "slateblue4", main = 'RunPulse')
+      
+        hist(bootResults[,5], col = "slateblue4", main = 'MaxPulse')
+  # our best guesses of parameters
+means <-  c(mean(bootResults[,1]), mean(bootResults[,2]), mean(bootResults[,3]), mean(bootResults[,4]), mean(bootResults[,5]))
+```
+
+```{r}
+myMod <-summary(lm(Oxygen~Age+RunTime+RunPulse+MaxPulse, data = myData))
+```
+
+```{r}
+qqnorm(myMod$residuals)
+```
+
+```{r}
+shapiro.test(myMod$residuals)
+```
+
+
+Dont reject p value -> normality assumption fulfilled
+
+
+```{r}
+plot(myMod$residuals)
+```
+Variance looks constant -> formal test
+
+Check collinearity ???
+
+```{r}
+bptest(myMod)
+
+```
+cant reject null hypothesis of homoskedasticity wnough evidence to assume that constant variance assumption is fulfilled.
+
+```{r}
+estimatedMean <- mean(myData$Oxygen)
+```
+
+```{r}
+t.test(myData$Oxygen, mu = 0)
+```
+
+```{r}
+ simResults <- numeric(999)  
+
+  for(i in 1: 999){
+    
+    # get the sampling distribution 
+    simResults[i] <- mean(sample(myData$Oxygen, 100, replace = T))
+    
+  }
+  
+  # if H0 is true, it is centred on zero
+  simResults <- simResults - estimatedMean
+```
+```{r}
+hist(simResults, col = "slateblue4")
+
+  abline(v = estimatedMean, lwd = 3)
+
+  addEst <- c(estimatedMean, simResults)
+  
+  locEst <- c(1, rep(0, 999))
+
+  locEst<- locEst[order(addEst)]
+  
+  k <- which(locEst == 1)
+  
+  min(k/1000, 1-k/1000)*2
+```
+
+
+```{r}
+meanIntercept <- means[1]
+meanAge <- means[2]
+meanRunTime <- means[3]
+meanRunPulse <- means[4]
+meanMaxPulse <- means[5]
+```
+
+```{r}
+simResults <- numeric(999)  
+simResults1 <- numeric(999)  
+simResults2<- numeric(999)  
+simResults3 <- numeric(999)  
+simResults4 <- numeric(999)  
+
+  simData <- myData
+
+  for(i in 1: 999){
+    # shuffle the x WRT y
+    simData$y <- sample(myData$Oxygen,31, replace = T)
+
+    # fit a model under H0
+    simLM <- lm(y ~ Age + RunTime + RunPulse + MaxPulse, data = simData)
+
+    #store the slope
+    simResults[i] <- coef(simLM)[1]
+    simResults1[i] <- coef(simLM)[2]
+    simResults2[i] <- coef(simLM)[3]
+    simResults3[i] <- coef(simLM)[4]
+    simResults4[i] <- coef(simLM)[5]
+
+  }
+```
+
+```{r}
+ hist(simResults, col = "slateblue4")
+
+  abline(v = means[1], lwd = 3)
+```
+
+```{r}
+ hist(simResults1, col = "slateblue4")
+
+  abline(v = means[2], lwd = 3)
+```
+
+
+
+```{r}
+ hist(simResults2, col = "slateblue4")
+
+  abline(v = means[3], lwd = 3)
+```
+
+
+```{r}
+ hist(simResults3, col = "slateblue4")
+
+  abline(v = means[4], lwd = 3)
+```
+
+
+```{r}
+ hist(simResults4, col = "slateblue4")
+
+  abline(v = means[5], lwd = 3)
+```
+
+
+```{r}
+addEst <- c(means[1], simResults)
+
+  locEst <- c(1, rep(0, 999))
+
+  locEst<- locEst[order(addEst)]
+
+  k <- which(locEst == 1)
+
+  min(k/1000, 1-k/1000)*2
+```
+
+
+```{r}
+addEst <- c(means[2], simResults1)
+
+  locEst <- c(1, rep(0, 999))
+
+  locEst<- locEst[order(addEst)]
+
+  k <- which(locEst == 1)
+
+  min(k/1000, 1-k/1000)*2
+```
+
+```{r}
+addEst <- c(means[3], simResults2)
+
+  locEst <- c(1, rep(0, 999))
+
+  locEst<- locEst[order(addEst)]
+
+  k <- which(locEst == 1)
+
+  min(k/1000, 1-k/1000)*2
+```
+
+```{r}
+addEst <-c(means[4], simResults3)
+
+  locEst <- c(1, rep(0, 999))
+
+  locEst<- locEst[order(addEst)]
+
+  k <- which(locEst == 1)
+
+  min(k/1000, 1-k/1000)*2
+```
+
+```{r}
+addEst <- c(means[5], simResults4)
+
+  locEst <- c(1, rep(0, 999))
+
+  locEst<- locEst[order(addEst)]
+
+  k <- which(locEst == 1)
+
+  min(k/1000, 1-k/1000)*2
+```
+
+
+Executive Summary 200 words
+
+Introduction 500 words
+
+Talk about the data and what our goal is. Make a linear model predicting oxygen intake based on predictors. And state which methods we will use to achieve that goal.
+Show a table of mean and standard deviance of each variable.`  
+
+Methods~ 1200 words
+State that linear model is the goal dont explain it in detail. Introduce assumptions
+
+Best subset selection (backwards, forwards)
+
+Randomization
+
+Bootstrapping
+
+Results 800 words
+Model selection results -> explain what we will use to choose best model and why BIC AIC something like that.
+Compare the different models 
+Show that we get the same model for forwards backwards and subset maybe ???
+
+Check if assumptions are fulfilled
+
+Results of bootstrap -> Confidence intervals and means which are the coefficients. Histograms go here.
+
+Interpret effects of coefficients. State which is statistically significant and which are not. Discuss R-squared and what that means for the model.
+
+Randomization test -> gives us p-values which we can say are signinficant or not.
+
+
+
+Conclusion 200 words
+
+
+
+
+
+
